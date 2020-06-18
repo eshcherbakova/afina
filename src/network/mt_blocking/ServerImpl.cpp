@@ -35,7 +35,7 @@ ServerImpl::~ServerImpl() {}
 
 // See Server.h
 void ServerImpl::Start(uint16_t port, uint32_t n_accept, uint32_t n_workers) {
-    cur_workers = 0;
+
     _logger = pLogging->select("network");
     _logger->info("Start mt_blocking network service");
 
@@ -43,7 +43,7 @@ void ServerImpl::Start(uint16_t port, uint32_t n_accept, uint32_t n_workers) {
     sigemptyset(&sig_mask);
     sigaddset(&sig_mask, SIGPIPE);
     //SIG_BLOCK — добавить сигналы к сигнальной маске процесса (заблокировать доставку)
-    if (pthread_sigmask(SIG_BLOCK, &sig_mask, NULL) != 0) {
+    if (pthread_sigmask(SIG_BLOCK, &sig_mask, nullptr) != 0) {
         throw std::runtime_error("Unable to mask SIGPIPE");
     }
     
@@ -157,7 +157,7 @@ void ServerImpl::Join() {
 
 // See Server.h
 void ServerImpl::OnRun() {
-
+    cur_workers = 0;
     while (running.load()) {
         _logger->debug("waiting for connection...");
 
@@ -168,7 +168,6 @@ void ServerImpl::OnRun() {
         if ((client_socket = accept(_server_socket, (struct sockaddr *)&client_addr, &client_addr_len)) == -1) {
             continue;
         }
-
         // Got new connection
         if (_logger->should_log(spdlog::level::debug)) {
             std::string host = "unknown", port = "-1";
@@ -197,8 +196,8 @@ void ServerImpl::OnRun() {
            {
               std::lock_guard<std::mutex> lg(set_blocked);
               std::thread(&ServerImpl::Worker, this, client_socket).detach();
+              worker_descriptors.emplace(client_socket);
            }
-           worker_descriptors.emplace(client_socket);
         
         }
     }
@@ -214,18 +213,18 @@ void ServerImpl::Worker(int client_socket) {
     // - command_to_execute: last command parsed out of stream
     // - arg_remains: how many bytes to read from stream to get command argument
     // - argument_for_command: buffer stores argument
-    std::size_t arg_remains;
+    std::size_t arg_remains = 0;
     Protocol::Parser parser;
     std::string argument_for_command;
     std::unique_ptr<Execute::Command> command_to_execute;
-
+    _logger->debug("Here");
        // Process new connection:
         // - read commands until socket alive
         // - execute each command
         // - send response
         try {
             int readed_bytes = -1;
-            char client_buffer[4096];
+            char client_buffer[4096] = "";
             while ((readed_bytes = read(client_socket, client_buffer, sizeof(client_buffer))) > 0) {
                 _logger->debug("Got {} bytes from socket", readed_bytes);
 
