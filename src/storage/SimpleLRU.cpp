@@ -13,12 +13,16 @@ bool SimpleLRU::Put(const std::string &key, const std::string &value) {
         return false;
     }
     
-    auto iter = _lru_index.find(key);
+    /*auto iter = _lru_index.find(key);
 
     if (iter == _lru_index.end()) {
         return PutIfAbsent(key, value);
+    }*/
+    auto iter = put_if_absent(key, value);
+    if (iter == _lru_index.end()) {
+        return true;
     }
-
+    
     move_to_tail(iter);
 
     while (_cur_size + value.size() - iter->second.get().value.size() > _max_size) {
@@ -39,10 +43,17 @@ bool SimpleLRU::PutIfAbsent(const std::string &key, const std::string &value) {
         return false;
     }
     
+    return put_if_absent(key, value) == _lru_index.end();
+    
+}
+
+std::map<std::reference_wrapper<const std::string>, std::reference_wrapper<SimpleLRU::lru_node>,
+         std::less<std::string>>::iterator
+SimpleLRU::put_if_absent(const std::string &key, const std::string &value) {
     auto iter = _lru_index.find(key);
 
     if (iter != _lru_index.end()) {
-        return false;
+        return iter;
     }
 
     while (key.size() + value.size() + _cur_size > _max_size) {
@@ -64,8 +75,10 @@ bool SimpleLRU::PutIfAbsent(const std::string &key, const std::string &value) {
     }
     _lru_index.emplace(new_node->key,
                        *new_node);
-    return true;
+    return _lru_index.end();;
+
 }
+
 
 // See MapBasedGlobalLockImpl.h
 bool SimpleLRU::Set(const std::string &key, const std::string &value) {

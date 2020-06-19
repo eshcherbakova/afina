@@ -78,6 +78,9 @@ private:
     void move_to_tail(std::map<std::reference_wrapper<const std::string>, std::reference_wrapper<lru_node>,
                                std::less<std::string>>::iterator &iter);
 
+        std::map<std::reference_wrapper<const std::string>, std::reference_wrapper<lru_node>,
+             std::less<std::string>>::iterator put_if_absent(const std::string &key, const std::string &value);                          
+
 };
 
 } // namespace Backend
