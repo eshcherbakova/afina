@@ -217,7 +217,6 @@ void ServerImpl::Worker(int client_socket) {
     Protocol::Parser parser;
     std::string argument_for_command;
     std::unique_ptr<Execute::Command> command_to_execute;
-    _logger->debug("Here");
        // Process new connection:
         // - read commands until socket alive
         // - execute each command
