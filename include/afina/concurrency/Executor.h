@@ -18,7 +18,6 @@ namespace Concurrency {
 class Executor {
 
 public:
-
     Executor(int low_watermark, int high_watermark, int max_queue_size, int idle_time);
     ~Executor();
 
@@ -42,34 +41,27 @@ public:
         auto exec = std::bind(std::forward<F>(func), std::forward<Types>(args)...);
 
         std::unique_lock<std::mutex> lock(this->mutex);
-        if (state != State::kRun) {
+        if (state != State::kRun || tasks.size() > max_queue_size) {
             return false;
         }
 
         // Enqueue new task
-        if (busy_workers_cnt < high_watermark) {
-        busy_workers_cnt++;
         tasks.push_back(exec);
-        empty_condition.notify_one();
-        return true;
+        if (busy_workers_cnt < threads_cnt) {
+            busy_workers_cnt++;
+            empty_condition.notify_one();
+        } else {
+            if (threads_cnt < high_watermark) {
+                auto new_tr = std::thread([this]() { perform(this); });
+                busy_workers_cnt++;
+                threads_cnt++;
+                new_tr.detach();
+            }
         }
-        if (threads_cnt < high_watermark) {
-        tasks.push_back(exec);
-        auto new_tr = std::thread([this]() { perform(this); });
-        busy_workers_cnt++;
-        threads_cnt++;
-        new_tr.detach();
         return true;
-        }
-        if (tasks.size() < max_queue_size) {
-        tasks.push_back(exec);
-        return true;
-        }
-        return false;
     }
 
-    private:
-    
+private:
     enum class State {
         // Threadpool is fully operational, tasks could be added and get executed
         kRun,
@@ -105,7 +97,7 @@ public:
     /**
      * Vector of actual threads that perorm execution
      */
-    //std::vector<std::thread> threads;
+    // std::vector<std::thread> threads;
 
     /**
      * Task queue
@@ -116,11 +108,11 @@ public:
      * Flag to stop bg threads
      */
     State state;
-    
+
     int busy_workers_cnt;
     int threads_cnt = 0;
     int low_watermark, high_watermark, max_queue_size, idle_time;
-    std::condition_variable stop_condition;    
+    std::condition_variable stop_condition;
 };
 
 } // namespace Concurrency

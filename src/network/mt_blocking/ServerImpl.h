@@ -1,13 +1,12 @@
 #ifndef AFINA_NETWORK_MT_BLOCKING_SERVER_H
 #define AFINA_NETWORK_MT_BLOCKING_SERVER_H
 
+#include <afina/concurrency/Executor.h>
+#include <afina/network/Server.h>
 #include <atomic>
-#include <thread>
 #include <condition_variable>
 #include <set>
-#include <afina/network/Server.h>
-#include <afina/concurrency/Executor.h>
-
+#include <thread>
 
 namespace spdlog {
 class logger;
@@ -55,7 +54,7 @@ private:
 
     // Thread to run network on
     std::thread _thread;
-    
+
     std::set<int> worker_descriptors;
     int max_workers = 5;
     int cur_workers;
