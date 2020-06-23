@@ -20,7 +20,6 @@
 #include <afina/Storage.h>
 #include <afina/execute/Command.h>
 #include <afina/logging/Service.h>
-
 #include "protocol/Parser.h"
 
 namespace Afina {
@@ -28,14 +27,14 @@ namespace Network {
 namespace MTblocking {
 
 // See Server.h
-ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps, std::shared_ptr<Logging::Service> pl) : Server(ps, pl) {}
+ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps, std::shared_ptr<Logging::Service> pl) : Server(ps, pl), _executor{2, 5, 7, 1500} {}
 
 // See Server.h
 ServerImpl::~ServerImpl() {}
 
 // See Server.h
 void ServerImpl::Start(uint16_t port, uint32_t n_accept, uint32_t n_workers) {
-
+    cur_workers = 0;
     _logger = pLogging->select("network");
     _logger->info("Start mt_blocking network service");
 
@@ -43,7 +42,7 @@ void ServerImpl::Start(uint16_t port, uint32_t n_accept, uint32_t n_workers) {
     sigemptyset(&sig_mask);
     sigaddset(&sig_mask, SIGPIPE);
     //SIG_BLOCK — добавить сигналы к сигнальной маске процесса (заблокировать доставку)
-    if (pthread_sigmask(SIG_BLOCK, &sig_mask, nullptr) != 0) {
+    if (pthread_sigmask(SIG_BLOCK, &sig_mask, NULL) != 0) {
         throw std::runtime_error("Unable to mask SIGPIPE");
     }
     
@@ -83,11 +82,9 @@ void ServerImpl::Start(uint16_t port, uint32_t n_accept, uint32_t n_workers) {
     // Связать сокет с IP-адресом и портом
     /*
     Связывает сокет с конкретным адресом. Когда сокет создается при помощи socket(), он ассоциируется с некоторым семейством адресов, но не с конкретным адресом. До того как сокет сможет принять входящие соединения, он должен быть связан с адресом. bind() принимает три аргумента:
-
     sockfd — дескриптор, представляющий сокет при привязке
     serv_addr — указатель на структуру sockaddr, представляющую адрес, к которому привязываем.
     addrlen — поле socklen_t, представляющее длину структуры sockaddr.
-
      Возвращает 0 при успехе и −1 при возникновении ошибки.
     */
     if (bind(_server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1) {
@@ -97,7 +94,6 @@ void ServerImpl::Start(uint16_t port, uint32_t n_accept, uint32_t n_workers) {
     //Объявить о желании принимать соединения. Слушает порт и ждет, когда будет установлено соединение.
     /*
     Подготавливает привязываемый сокет к принятию входящих соединений. Данная функция применима только к типам сокетов SOCK_STREAM и SOCK_SEQPACKET. Принимает два аргумента:
-
     sockfd — корректный дескриптор сокета.
     backlog — целое число, означающее число установленных соединений, которые могут быть обработаны в любой момент времени. Операционная система обычно ставит его равным максимальному значению.
 После принятия соединения оно выводится из очереди. В случае успеха возвращается 0, в случае возникновения ошибки возвращается −1.
@@ -144,20 +140,21 @@ void ServerImpl::Stop() {
      */
 void ServerImpl::Join() {
 
-    {
+ /*   {
         std::unique_lock<std::mutex> lock(set_blocked);
         //wait causes the current thread to block until the condition variable is notified
         while (running.load() || cur_workers != 0) server_stop.wait(lock);
     }
-    
+*/      
     assert(_thread.joinable());
     _thread.join();
+    _executor.Stop(true);
     close(_server_socket);
 }
 
 // See Server.h
 void ServerImpl::OnRun() {
-    cur_workers = 0;
+
     while (running.load()) {
         _logger->debug("waiting for connection...");
 
@@ -168,6 +165,7 @@ void ServerImpl::OnRun() {
         if ((client_socket = accept(_server_socket, (struct sockaddr *)&client_addr, &client_addr_len)) == -1) {
             continue;
         }
+
         // Got new connection
         if (_logger->should_log(spdlog::level::debug)) {
             std::string host = "unknown", port = "-1";
@@ -190,16 +188,21 @@ void ServerImpl::OnRun() {
         }
 
         // Start new thread and process data from/to connection
-        if (cur_workers < max_workers && running.load()) {
+        /*if (cur_workers < max_workers && running.load()) {
            
            cur_workers++;
            {
               std::lock_guard<std::mutex> lg(set_blocked);
               std::thread(&ServerImpl::Worker, this, client_socket).detach();
-              worker_descriptors.emplace(client_socket);
            }
+           worker_descriptors.emplace(client_socket);
         
+        }*/
+        if (!(_executor.Execute(&ServerImpl::Worker, this, client_socket))) {
+            close(client_socket);
         }
+
+
     }
 
     // Cleanup on exit...
@@ -213,17 +216,18 @@ void ServerImpl::Worker(int client_socket) {
     // - command_to_execute: last command parsed out of stream
     // - arg_remains: how many bytes to read from stream to get command argument
     // - argument_for_command: buffer stores argument
-    std::size_t arg_remains = 0;
+    std::size_t arg_remains;
     Protocol::Parser parser;
     std::string argument_for_command;
     std::unique_ptr<Execute::Command> command_to_execute;
+
        // Process new connection:
         // - read commands until socket alive
         // - execute each command
         // - send response
         try {
             int readed_bytes = -1;
-            char client_buffer[4096] = "";
+            char client_buffer[4096];
             while ((readed_bytes = read(client_socket, client_buffer, sizeof(client_buffer))) > 0) {
                 _logger->debug("Got {} bytes from socket", readed_bytes);
 

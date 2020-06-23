@@ -16,19 +16,10 @@ namespace Concurrency {
  * # Thread pool
  */
 class Executor {
-    enum class State {
-        // Threadpool is fully operational, tasks could be added and get executed
-        kRun,
 
-        // Threadpool is on the way to be shutdown, no ned task could be added, but existing will be
-        // completed as requested
-        kStopping,
+public:
 
-        // Threadppol is stopped
-        kStopped
-    };
-
-    Executor(std::string name, int size);
+    Executor(int low_watermark, int high_watermark, int max_queue_size, int idle_time);
     ~Executor();
 
     /**
@@ -37,7 +28,7 @@ class Executor {
      *
      * In case if await flag is true, call won't return until all background jobs are done and all threads are stopped
      */
-    void Stop(bool await = false);
+    void Stop(bool await);
 
     /**
      * Add function to be executed on the threadpool. Method returns true in case if task has been placed
@@ -56,12 +47,40 @@ class Executor {
         }
 
         // Enqueue new task
+        if (busy_workers_cnt < high_watermark) {
+        busy_workers_cnt++;
         tasks.push_back(exec);
         empty_condition.notify_one();
         return true;
+        }
+        if (threads_cnt < high_watermark) {
+        tasks.push_back(exec);
+        auto new_tr = std::thread([this]() { perform(this); });
+        busy_workers_cnt++;
+        threads_cnt++;
+        new_tr.detach();
+        return true;
+        }
+        if (tasks.size() < max_queue_size) {
+        tasks.push_back(exec);
+        return true;
+        }
+        return false;
     }
 
-private:
+    private:
+    
+    enum class State {
+        // Threadpool is fully operational, tasks could be added and get executed
+        kRun,
+
+        // Threadpool is on the way to be shutdown, no ned task could be added, but existing will be
+        // completed as requested
+        kStopping,
+
+        // Threadppol is stopped
+        kStopped
+    };
     // No copy/move/assign allowed
     Executor(const Executor &);            // = delete;
     Executor(Executor &&);                 // = delete;
@@ -86,7 +105,7 @@ private:
     /**
      * Vector of actual threads that perorm execution
      */
-    std::vector<std::thread> threads;
+    //std::vector<std::thread> threads;
 
     /**
      * Task queue
@@ -97,6 +116,11 @@ private:
      * Flag to stop bg threads
      */
     State state;
+    
+    int busy_workers_cnt;
+    int threads_cnt = 0;
+    int low_watermark, high_watermark, max_queue_size, idle_time;
+    std::condition_variable stop_condition;    
 };
 
 } // namespace Concurrency
