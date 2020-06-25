@@ -91,12 +91,15 @@ void ServerImpl::Stop() {
     if (eventfd_write(_event_fd, 1)) {
         throw std::runtime_error("Failed to wakeup workers");
     }
+
+    shutdown(_server_socket, SHUT_RDWR);
 }
 
 // See Server.h
 void ServerImpl::Join() {
     // Wait for work to be complete
     _work_thread.join();
+    close(_server_socket);
 }
 
 // See ServerImpl.h
@@ -108,8 +111,17 @@ void ServerImpl::OnRun() {
     }
 
     struct epoll_event event;
+    /*
+    EPOLLIN
+    Ассоциированный файл доступен для операций read.
+    */
     event.events = EPOLLIN;
     event.data.fd = _server_socket;
+    // int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event)
+    /*
+    Управляет описателем epoll - epfd - через запрос выполнения операции op на цели, описателе файла fd. Событие event
+    описывает объект, привязанный к описателю файла fd.
+    */
     if (epoll_ctl(epoll_descr, EPOLL_CTL_ADD, _server_socket, &event)) {
         throw std::runtime_error("Failed to add file descriptor to epoll");
     }
@@ -124,6 +136,42 @@ void ServerImpl::OnRun() {
     bool run = true;
     std::array<struct epoll_event, 64> mod_list;
     while (run) {
+
+        /*
+               int epoll_wait(int epfd, struct epoll_event *events,
+                      int maxevents, int timeout);
+
+       The epoll_wait() system call waits for events on the epoll
+       instance referred to by the file descriptor epfd.  The buffer pointed
+       to by events is used to return information from the ready list about
+       file descriptors in the interest list that have some events
+       available.  Up to maxevents are returned by epoll_wait().  The
+       maxevents argument must be greater than zero.
+
+       The timeout argument specifies the number of milliseconds that
+       epoll_wait() will block.  Time is measured against the
+       CLOCK_MONOTONIC clock.
+
+       A call to epoll_wait() will block until either:
+
+       · a file descriptor delivers an event;
+
+       · the call is interrupted by a signal handler; or
+
+       · the timeout expires.
+
+       Note that the timeout interval will be rounded up to the system clock
+       granularity, and kernel scheduling delays mean that the blocking
+       interval may overrun by a small amount.  Specifying a timeout of -1
+       causes epoll_wait() to block indefinitely, while specifying a timeout
+       equal to zero cause epoll_wait() to return immediately, even if no
+       events are available.
+
+              When successful, epoll_wait() returns the number of file descriptors
+       ready for the requested I/O, or zero if no file descriptor became
+       ready during the requested timeout milliseconds.  When an error
+       occurs, epoll_wait() returns -1 and errno is set appropriately.
+        */
         int nmod = epoll_wait(epoll_descr, &mod_list[0], mod_list.size(), -1);
         _logger->debug("Acceptor wokeup: {} events", nmod);
 
@@ -156,7 +204,7 @@ void ServerImpl::OnRun() {
                 }
             }
 
-            // Does it alive?
+            // Is it alive?
             if (!pc->isAlive()) {
                 if (epoll_ctl(epoll_descr, EPOLL_CTL_DEL, pc->_socket, &pc->_event)) {
                     _logger->error("Failed to delete connection from epoll");
@@ -171,6 +219,7 @@ void ServerImpl::OnRun() {
                     _logger->error("Failed to change connection event mask");
 
                     close(pc->_socket);
+                    cns.erase(pc);
                     pc->OnClose();
 
                     delete pc;
@@ -178,6 +227,11 @@ void ServerImpl::OnRun() {
             }
         }
     }
+    for (auto one_cns : cns) {
+        close(one_cns->_socket);
+        delete one_cns;
+    }
+    cns.clear();
     _logger->warn("Acceptor stopped");
 }
 
@@ -188,6 +242,18 @@ void ServerImpl::OnNewConnection(int epoll_descr) {
 
         // No need to make these sockets non blocking since accept4() takes care of it.
         in_len = sizeof in_addr;
+
+        /*
+        int accept4(int sockfd, struct sockaddr *addr, socklen_t *addrlen, int flags);
+        The accept() system call is used with connection-based socket types (SOCK_STREAM, SOCK_SEQPACKET). It extracts
+the first connection request on the queue of pending connections for the listening socket, sockfd, creates a new
+connected socket, and returns a new file descriptor referring to that socket. The newly created socket is not in the
+listening state. The original socket sockfd is unaffected by this call.
+
+If no pending connections are present on the queue, and the socket is not marked as nonblocking, accept() blocks the
+caller until a connection is present. If the socket is marked nonblocking and no pending connections are present on the
+queue, accept() fails with the error EAGAIN or EWOULDBLOCK.
+        */
         int infd = accept4(_server_socket, &in_addr, &in_len, SOCK_NONBLOCK | SOCK_CLOEXEC);
         if (infd == -1) {
             if ((errno == EAGAIN) || (errno == EWOULDBLOCK)) {
@@ -207,16 +273,17 @@ void ServerImpl::OnNewConnection(int epoll_descr) {
         }
 
         // Register the new FD to be monitored by epoll.
-        Connection *pc = new(std::nothrow) Connection(infd);
+        Connection *pc = new (std::nothrow) Connection(infd, pStorage, _logger);
         if (pc == nullptr) {
             throw std::runtime_error("Failed to allocate connection");
         }
-
+        cns.insert(pc);
         // Register connection in worker's epoll
         pc->Start();
         if (pc->isAlive()) {
             if (epoll_ctl(epoll_descr, EPOLL_CTL_ADD, pc->_socket, &pc->_event)) {
                 pc->OnError();
+                cns.erase(pc);
                 delete pc;
             }
         }
