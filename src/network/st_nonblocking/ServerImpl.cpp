@@ -91,6 +91,9 @@ void ServerImpl::Stop() {
     if (eventfd_write(_event_fd, 1)) {
         throw std::runtime_error("Failed to wakeup workers");
     }
+    for (auto one_cns : cns) {
+        shutdown(one_cns->_socket, SHUT_RD);
+    }
 
     shutdown(_server_socket, SHUT_RDWR);
 }
@@ -209,26 +212,19 @@ void ServerImpl::OnRun() {
                 if (epoll_ctl(epoll_descr, EPOLL_CTL_DEL, pc->_socket, &pc->_event)) {
                     _logger->error("Failed to delete connection from epoll");
                 }
-
-                close(pc->_socket);
                 pc->OnClose();
-
                 delete pc;
             } else if (pc->_event.events != old_mask) {
                 if (epoll_ctl(epoll_descr, EPOLL_CTL_MOD, pc->_socket, &pc->_event)) {
                     _logger->error("Failed to change connection event mask");
-
-                    close(pc->_socket);
                     cns.erase(pc);
                     pc->OnClose();
-
                     delete pc;
                 }
             }
         }
     }
     for (auto one_cns : cns) {
-        close(one_cns->_socket);
         delete one_cns;
     }
     cns.clear();

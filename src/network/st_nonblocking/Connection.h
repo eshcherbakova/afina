@@ -23,6 +23,10 @@ public:
         shift = 0;
     }
 
+    ~Connection() {
+        close(_socket);  
+    }
+
     inline bool isAlive() const { return is_alive; }
 
     void Start();
