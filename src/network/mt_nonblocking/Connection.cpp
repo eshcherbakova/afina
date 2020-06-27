@@ -31,11 +31,13 @@ void Connection::OnClose() {
 
 // See Connection.h
 void Connection::DoRead() {
-    std::atomic_thread_fence(std::memory_order_acquire);
+    // std::atomic_thread_fence(std::memory_order_acquire);
+    std::lock_guard<std::mutex> lock(con_mutex);
     try {
         int cur_readed_bytes = -1;
-        while ((cur_readed_bytes = read(_socket, client_buffer, sizeof(client_buffer))) > 0) {
-            _logger->debug("Got {} bytes from socket", readed_bytes);
+        while ((cur_readed_bytes = read(_socket, client_buffer + readed_bytes, sizeof(client_buffer) - readed_bytes)) >
+               0) {
+            _logger->debug("Got {} bytes from socket", cur_readed_bytes);
             readed_bytes += cur_readed_bytes;
             // Single block of data readed from the socket could trigger inside actions a multiple times,
             // for example:
@@ -46,16 +48,21 @@ void Connection::DoRead() {
                 // There is no command yet
                 if (!command_to_execute) {
                     std::size_t parsed = 0;
-                    if (parser.Parse(client_buffer, readed_bytes, parsed)) {
-                        // There is no command to be launched, continue to parse input stream
-                        // Here we are, current chunk finished some command, process it
-                        _logger->debug("Found new command: {} in {} bytes", parser.Name(), parsed);
-                        command_to_execute = parser.Build(arg_remains);
-                        if (arg_remains > 0) {
-                            arg_remains += 2;
+                    try {
+                        if (parser.Parse(client_buffer, readed_bytes, parsed)) {
+                            // There is no command to be launched, continue to parse input stream
+                            // Here we are, current chunk finished some command, process it
+                            _logger->debug("Found new command: {} in {} bytes", parser.Name(), parsed);
+                            command_to_execute = parser.Build(arg_remains);
+                            if (arg_remains > 0) {
+                                arg_remains += 2;
+                            }
                         }
+                    } catch (std::runtime_error &ex) {
+                        output_vec.emplace_back("(?^u:ERROR)");
+                        _event.events |= EPOLLOUT;
+                        throw std::runtime_error(ex.what());
                     }
-
                     // Parsed might fail to consume any bytes from input stream. In real life that could happen,
                     // for example, because we are working with UTF-16 chars and only 1 byte left in stream
                     if (parsed == 0) {
@@ -95,9 +102,9 @@ void Connection::DoRead() {
                     if (!(_event.events & EPOLLOUT)) {
                         _event.events |= EPOLLOUT;
                     }
-                    if (send(_socket, result.data(), result.size(), 0) <= 0) {
+                    /*if (send(_socket, result.data(), result.size(), 0) <= 0) {
                         throw std::runtime_error("Failed to send response");
-                    }
+                    }*/
 
                     // Prepare for the next command
                     command_to_execute.reset();
@@ -110,7 +117,7 @@ void Connection::DoRead() {
         if (readed_bytes == 0) {
             _logger->debug("Connection closed");
             data_ready.store(true, std::memory_order_relaxed);
-            std::atomic_thread_fence(std::memory_order_release);
+            // std::atomic_thread_fence(std::memory_order_release);
         } else {
 
             throw std::runtime_error(std::string(strerror(errno)));
@@ -119,15 +126,15 @@ void Connection::DoRead() {
         _logger->error("Failed to process connection on descriptor {}: {}", _socket, ex.what());
         OnError();
         data_ready.store(true, std::memory_order_relaxed);
-        std::atomic_thread_fence(std::memory_order_release);
+        // std::atomic_thread_fence(std::memory_order_release);
     }
 }
 
 // See Connection.h
 void Connection::DoWrite() {
     _logger->debug("DoWrite on {}", _socket);
-    std::atomic_thread_fence(std::memory_order_acquire);
-
+    // std::atomic_thread_fence(std::memory_order_acquire);
+    std::lock_guard<std::mutex> lock(con_mutex);
     if (!data_ready.load(std::memory_order_relaxed) || output_vec.empty()) {
         return;
     }
@@ -176,7 +183,7 @@ void Connection::DoWrite() {
         is_alive.store(false, std::memory_order_relaxed);
     }
 
-    std::atomic_thread_fence(std::memory_order_release);
+    // std::atomic_thread_fence(std::memory_order_release);
 }
 
 } // namespace MTnonblock

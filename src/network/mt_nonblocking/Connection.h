@@ -51,6 +51,7 @@ private:
     std::shared_ptr<spdlog::logger> _logger;
     std::shared_ptr<Afina::Storage> pStorage;
 
+    std::mutex con_mutex;
     // Here is connection state
     // - parser: parse state of the stream
     // - command_to_execute: last command parsed out of stream
