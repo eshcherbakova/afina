@@ -96,7 +96,7 @@ void ServerImpl::Start(uint16_t port, uint32_t n_acceptors, uint32_t n_workers) 
 
     _workers.reserve(n_workers);
     for (int i = 0; i < n_workers; i++) {
-        _workers.emplace_back(pStorage, pLogging);
+        _workers.emplace_back(pStorage, pLogging, this);
         _workers.back().Start(_data_epoll_fd);
     }
 
@@ -119,6 +119,13 @@ void ServerImpl::Stop() {
     if (eventfd_write(_event_fd, 1)) {
         throw std::runtime_error("Failed to wakeup workers");
     }
+    {
+        std::lock_guard<std::mutex> l(set_is_blocked);
+        for (auto one_cns : cns) {
+            shutdown(one_cns->_socket, SHUT_RD);
+        }
+    }
+    shutdown(_server_socket, SHUT_RDWR);
 }
 
 // See Server.h
@@ -126,10 +133,20 @@ void ServerImpl::Join() {
     for (auto &t : _acceptors) {
         t.join();
     }
-
+    _acceptors.clear();
     for (auto &w : _workers) {
         w.Join();
     }
+    _workers.clear();
+    {
+        std::lock_guard<std::mutex> l(set_is_blocked);
+        for (auto one_cns : cns) {
+            delete one_cns;
+        }
+        cns.clear();
+    }
+
+    close(_server_socket);
 }
 
 // See ServerImpl.h
@@ -193,7 +210,7 @@ void ServerImpl::OnRun() {
                 }
 
                 // Register the new FD to be monitored by epoll.
-                Connection *pc = new Connection(infd);
+                Connection *pc = new Connection(infd, pStorage, _logger);
                 if (pc == nullptr) {
                     throw std::runtime_error("Failed to allocate connection");
                 }
@@ -204,9 +221,13 @@ void ServerImpl::OnRun() {
                     pc->_event.events |= EPOLLONESHOT;
                     int epoll_ctl_retval;
                     if ((epoll_ctl_retval = epoll_ctl(_data_epoll_fd, EPOLL_CTL_ADD, pc->_socket, &pc->_event))) {
-                        _logger->debug("epoll_ctl failed during connection register in workers'epoll: error {}", epoll_ctl_retval);
+                        _logger->debug("epoll_ctl failed during connection register in workers'epoll: error {}",
+                                       epoll_ctl_retval);
                         pc->OnError();
-                        delete pc;
+                        delete_con(pc);
+                    } else {
+                        std::lock_guard<std::mutex> l(set_is_blocked);
+                        cns.emplace(pc);
                     }
                 }
             }

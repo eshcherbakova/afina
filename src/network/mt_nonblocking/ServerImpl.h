@@ -1,11 +1,13 @@
 #ifndef AFINA_NETWORK_MT_NONBLOCKING_SERVER_H
 #define AFINA_NETWORK_MT_NONBLOCKING_SERVER_H
 
-#include <thread>
-#include <vector>
-
+#include "Connection.h"
 #include <afina/network/Server.h>
-
+#include <mutex>
+#include <set>
+#include <thread>
+#include <unordered_set>
+#include <vector>
 namespace spdlog {
 class logger;
 }
@@ -22,6 +24,8 @@ class Worker;
  * Epoll based server
  */
 class ServerImpl : public Server {
+    friend class Worker;
+
 public:
     ServerImpl(std::shared_ptr<Afina::Storage> ps, std::shared_ptr<Logging::Service> pl);
     ~ServerImpl();
@@ -63,6 +67,15 @@ private:
 
     // threads serving read/write requests
     std::vector<Worker> _workers;
+
+    std::set<Connection *> cns;
+    std::mutex set_is_blocked;
+
+    void delete_con(Connection *connection) {
+        std::lock_guard<std::mutex> l(set_is_blocked);
+        cns.erase(connection);
+        delete connection;
+    }
 };
 
 } // namespace MTnonblock
