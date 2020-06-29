@@ -18,14 +18,13 @@ public:
         std::memset(&_event, 0, sizeof(struct epoll_event));
         _event.data.ptr = this;
         is_alive = true;
+        data_ready = false;
         arg_remains = 0;
         readed_bytes = 0;
         shift = 0;
     }
 
-    ~Connection() {
-        close(_socket);  
-    }
+    ~Connection() { close(_socket); }
 
     inline bool isAlive() const { return is_alive; }
 
@@ -44,7 +43,7 @@ private:
     struct epoll_event _event;
 
     bool is_alive;
-
+    bool data_ready;
     std::shared_ptr<spdlog::logger> _logger;
     std::shared_ptr<Afina::Storage> pStorage;
 

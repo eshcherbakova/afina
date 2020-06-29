@@ -102,6 +102,10 @@ void ServerImpl::Stop() {
 void ServerImpl::Join() {
     // Wait for work to be complete
     _work_thread.join();
+    for (auto one_cns : cns) {
+        delete one_cns;
+    }
+    cns.clear();
     close(_server_socket);
 }
 
@@ -213,21 +217,17 @@ void ServerImpl::OnRun() {
                     _logger->error("Failed to delete connection from epoll");
                 }
                 pc->OnClose();
+                cns.erase(pc);
                 delete pc;
             } else if (pc->_event.events != old_mask) {
                 if (epoll_ctl(epoll_descr, EPOLL_CTL_MOD, pc->_socket, &pc->_event)) {
                     _logger->error("Failed to change connection event mask");
-                    cns.erase(pc);
                     pc->OnClose();
                     delete pc;
                 }
             }
         }
     }
-    for (auto one_cns : cns) {
-        delete one_cns;
-    }
-    cns.clear();
     _logger->warn("Acceptor stopped");
 }
 
